@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #4d6bfe;
+}
+
+html{
+  @apply scroll-smooth;
+}
+
+::-webkit-scrollbar{
+  display: none;
+}
+.loader div:nth-child(2){
+  animation-delay: 0.2s;
+}
+.loader div:nth-child(3){
+  animation-delay: 0.4s;
+}
+
+code{
+  white-space: pre-wrap !important;
+}
+
+pre{
+  border-radius: 10px !important;
+}
+.chat-message a {
+  text-decoration: underline;
+}
+.chat-message a { text-decoration: underline; }
