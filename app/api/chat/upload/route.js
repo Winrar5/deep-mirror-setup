@@ -1,6 +1,6 @@
 // /app/api/chat/upload/route.js
 export const runtime = 'nodejs';
-export const maxDuration = 120;
+export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
