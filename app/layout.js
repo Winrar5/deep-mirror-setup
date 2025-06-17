@@ -5,7 +5,7 @@ import Providers from './providers';
 
 const inter = Inter({ variable: '--font-inter', subsets: ['latin'] });
 
-export const metadata = { title: 'DeepSeek - GreatStack', description: 'Full Stack Project' };
+export const metadata = { title: 'Deep Mirror', description: 'Full Stack Project' };
 
 export default function RootLayout({ children }) {
   return (

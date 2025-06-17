@@ -11,8 +11,6 @@ import deepthink_icon      from "./deepthink_icon.svg";
 import chat_icon           from "./chat_icon.svg";
 import dislike_icon        from "./dislike_icon.svg";
 import like_icon           from "./like_icon.svg";
-import phone_icon          from "./phone_icon.svg";
-import phone_icon_dull     from "./phone_icon_dull.svg";
 import pencil_icon         from "./pencil_icon.svg";
 import delete_icon         from "./delete_icon.svg";
 import pin_icon            from "./pin_icon.svg";
@@ -21,7 +19,6 @@ import sidebar_icon        from "./sidebar_icon.svg";
 import sidebar_close_icon  from "./sidebar_close_icon.svg";
 import chat_icon_dull      from "./chat_icon_dull.svg";
 import three_dots          from "./three_dots.svg";
-import new_icon            from "./new_icon.svg";
 
 import clear_history_icon from './clear_history.svg';
 import staple_icon        from './staple_icon.svg';   // ← нова назва
@@ -50,8 +47,6 @@ export const assets = {
   chat_icon,
   dislike_icon,
   like_icon,
-  phone_icon,
-  phone_icon_dull,
   pencil_icon,
   delete_icon,
   pin_icon,
@@ -60,5 +55,4 @@ export const assets = {
   sidebar_close_icon,
   chat_icon_dull,
   three_dots,
-  new_icon,
 };
