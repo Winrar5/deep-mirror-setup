@@ -1,4 +1,3 @@
-// /components/Message.jsx
 'use client';
 
 import { assets } from '@/assets/assets';
@@ -16,16 +15,16 @@ const MODE_LABEL = {
   search: 'Search',
 };
 
-/** Small visual chip that shows an attached file */
 const FileChip = ({ name }) => (
   <div className="flex items-center gap-1 mt-1 bg-white/10 px-2 py-1 rounded-md">
-    <Image src={assets.file_icon} alt="" className="w-4" />
+    <Image src={assets.file_icon} alt="file" className="w-4" />
     <span className="text-xs">{name}</span>
   </div>
 );
 
 const Message = ({ msg, index }) => {
-  const { role, content, files } = msg;
+  // дефолти, щоб не було undefined
+  const { role = 'assistant', content = '', files = [] } = msg;
   const { selectedChat, setSelectedChat, startEdit } = useAppContext();
   const [regenLoading, setRegenLoading] = useState(false);
 
@@ -33,41 +32,64 @@ const Message = ({ msg, index }) => {
     Prism.highlightAll();
   }, [content]);
 
+  /* ---------- Злиття [FILE] ---------- */
+  let mergedFileName = null;
+  if (
+    role === 'user' &&
+    index > 0 &&
+    selectedChat.messages[index - 1]?.role === 'system' &&
+    selectedChat.messages[index - 1].content?.startsWith('[FILE]')
+  ) {
+    const prev = selectedChat.messages[index - 1].content;
+    const rawName = prev
+      .replace('[FILE]', '')
+      .trim()
+      .split(/\n/, 2)[0]
+      .replace(/\s*\(.*?\)$/, '')
+      .trim();
+    mergedFileName = rawName;
+  }
+
+  // ховаємо системне [FILE], якщо воно злите
+  if (
+    role === 'system' &&
+    content.startsWith('[FILE]') &&
+    selectedChat.messages[index + 1]?.role === 'user'
+  ) {
+    return null;
+  }
+
+  /* ---------- Копіювання ---------- */
   const copy = () => {
     navigator.clipboard.writeText(content);
     toast.success('Copied!');
   };
 
+  /* ---------- Regenerate ---------- */
   const regenerate = async (mode) => {
     try {
       setRegenLoading(true);
-
       const msgs = [...selectedChat.messages];
+
+      // шукаємо попередній user-prompt
       const promptIdxRel = msgs
         .slice(0, index)
         .reverse()
         .findIndex((m) => m.role === 'user');
-
-      if (promptIdxRel < 0) {
-        return toast.error('Prompt not found for regeneration');
-      }
+      if (promptIdxRel < 0) return toast.error('Prompt not found');
 
       const userIdx = index - 1 - promptIdxRel;
       const promptMsg = msgs[userIdx];
-      const promptContent = promptMsg.content;
+      const promptContent = promptMsg.content || '';
+      const promptFiles = promptMsg.files || [];
 
-      // Insert a duplicate user prompt before regenerating
-      const duplicateUser = {
+      // дублюємо prompt
+      msgs.push({
         role: 'user',
         content: promptContent,
         timestamp: Date.now(),
-        files: Array.isArray(promptMsg.files)
-          ? promptMsg.files.map((f) => ({ ...f }))
-          : [],
-      };
-      msgs.push(duplicateUser);
-
-      // Placeholder assistant message
+        files: promptFiles.map((f) => ({ ...f })),
+      });
       const placeholder = {
         role: 'assistant',
         content: '↻ Regenerating…',
@@ -76,18 +98,16 @@ const Message = ({ msg, index }) => {
       msgs.push(placeholder);
       setSelectedChat((prev) => ({ ...prev, messages: msgs }));
 
+      // запит
       let data;
-      if (Array.isArray(promptMsg.files) && promptMsg.files.length) {
+      if (promptFiles.length) {
         const fd = new FormData();
-        promptMsg.files.forEach((f) => {
-          if (f.serverFileId) {
-            fd.append('fileId', f.serverFileId);
-          }
-        });
+        promptFiles.forEach(
+          (f) => f.serverFileId && fd.append('fileId', f.serverFileId)
+        );
         fd.append('chatId', selectedChat._id);
         fd.append('prompt', promptContent);
         fd.append('mode', mode);
-
         const resp = await axios.post('/api/chat/upload', fd);
         data = resp.data;
       } else {
@@ -99,16 +119,18 @@ const Message = ({ msg, index }) => {
         data = resp.data;
       }
 
-      const aiText = data?.data?.content ?? data?.answer;
+      const aiText = data?.data?.content ?? data?.answer ?? '';
       if (!aiText) throw new Error('No content returned');
 
-      placeholder.content = `${MODE_LABEL[mode] ? `[${MODE_LABEL[mode]}] ` : ''}${aiText}`;
+      placeholder.content =
+        (MODE_LABEL[mode] ? `[${MODE_LABEL[mode]}] ` : '') + aiText;
       placeholder.timestamp = Date.now();
 
-      if (data?.data?.fileIds && Array.isArray(promptMsg.files)) {
+      // оновлюємо fileIds
+      if (data?.data?.fileIds?.length && promptFiles.length) {
         msgs[userIdx] = {
           ...promptMsg,
-          files: promptMsg.files.map((f, i) => ({
+          files: promptFiles.map((f, i) => ({
             ...f,
             serverFileId: data.data.fileIds[i],
           })),
@@ -129,34 +151,32 @@ const Message = ({ msg, index }) => {
       return (
         <div className="flex flex-col">
           <span className="text-white/90 whitespace-pre-wrap">{content}</span>
-          {(files || []).map((f, i) => (
+          {mergedFileName && <FileChip name={mergedFileName} />}
+          {files.map((f, i) => (
             <FileChip key={i} name={f.name} />
           ))}
         </div>
       );
     }
 
-    if (role === 'system' && content.startsWith('[FILE]')) {
-      const cleaned = content.replace('[FILE]', '').trim();
-      const [desc, filename] = cleaned.split('\n');
-      return (
-        <div className="flex flex-col">
-          <span className="text-white/90 whitespace-pre-wrap">{desc || filename}</span>
-          <FileChip name={filename || desc} />
-        </div>
-      );
-    }
-
+    /* assistant / system */
     return (
       <>
         <Image
           src={assets.logo_icon}
-          alt=""
+          alt="assistant"
           className="h-9 w-9 p-1 border border-white/15 rounded-full"
         />
         <div className="chat-message space-y-4 w-full overflow-x-auto">
           {content === '↻ Regenerating…' ? (
-            <RegeneratingIndicator />
+            <div className="flex items-center gap-2 text-white text-sm">
+              <span>↻ Regenerating</span>
+              <div className="flex gap-[2px]">
+                <div className="w-1 h-1 rounded-full bg-white animate-bounce" />
+                <div className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0.15s]" />
+                <div className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0.3s]" />
+              </div>
+            </div>
           ) : (
             <Markdown>{content}</Markdown>
           )}
@@ -167,27 +187,16 @@ const Message = ({ msg, index }) => {
 
   return (
     <div className="flex flex-col items-center w-full max-w-3xl text-sm">
-      {/*
-        ЗМІНИЛИ ЛІНІЮ НИЖЧЕ: додали випадок для role === 'system' && content.startsWith('[FILE]'
-        щоб у цих повідомлень також був клас items-end і вони вирівнювалися вправо
-      */}
       <div
         className={`flex flex-col w-full mb-8 ${
-          role === 'user' || (role === 'system' && content.startsWith('[FILE]'))
-            ? 'items-end'
-            : ''
+          role === 'user' ? 'items-end' : ''
         }`}
       >
         <div
           className={`group relative flex max-w-2xl py-3 rounded-xl ${
-            role === 'user'
-              ? 'bg-[#414158] px-5'
-              : role === 'system' && content.startsWith('[FILE]')
-              ? 'gap-3 bg-[#3a3a4d] px-4'
-              : 'gap-3'
+            role === 'user' ? 'bg-[#414158] px-5' : 'gap-3'
           }`}
         >
-          {/* Hover tool buttons (copy, regenerate, edit) */}
           {role !== 'system' && (
             <div
               className={`opacity-0 group-hover:opacity-100 absolute ${
@@ -198,42 +207,32 @@ const Message = ({ msg, index }) => {
                 <Image
                   onClick={copy}
                   src={assets.copy_icon}
-                  alt=""
+                  alt="copy"
                   className="w-4 cursor-pointer"
                 />
                 {role === 'assistant' && (
-                  <Dropdown disabled={regenLoading} onSelect={regenerate} />
+                  <Dropdown
+                    disabled={regenLoading}
+                    onSelect={regenerate}
+                  />
                 )}
-                {role === 'user' && (
+                {role === 'user' && content && (
                   <Image
                     src={assets.pencil_icon}
-                    alt=""
+                    alt="edit"
                     className="w-4.5 cursor-pointer"
-                    onClick={() => startEdit(index, content, msg.files || [])}
+                    onClick={() => startEdit(index, content, files)}
                   />
                 )}
               </div>
             </div>
           )}
-
-          {/* MESSAGE BODY */}
           {renderBody()}
         </div>
       </div>
     </div>
   );
 };
-
-const RegeneratingIndicator = () => (
-  <div className="flex items-center gap-2 text-white text-sm">
-    <span>↻ Regenerating</span>
-    <div className="flex gap-[2px]">
-      <div className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0s]" />
-      <div className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0.15s]" />
-      <div className="w-1 h-1 rounded-full bg-white animate-bounce [animation-delay:0.3s]" />
-    </div>
-  </div>
-);
 
 const Dropdown = ({ onSelect, disabled }) => {
   const [open, setOpen] = useState(false);
@@ -242,12 +241,11 @@ const Dropdown = ({ onSelect, disabled }) => {
     { label: 'DeepThink (R1)', mode: 'deepthink' },
     { label: 'Search', mode: 'search' },
   ];
-
   return (
     <div className="relative">
       <Image
         src={assets.regenerate_icon}
-        alt=""
+        alt="regen"
         className={`w-4 cursor-pointer ${disabled ? 'opacity-40' : ''}`}
         onClick={() => !disabled && setOpen((o) => !o)}
       />

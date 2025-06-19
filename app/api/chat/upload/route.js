@@ -11,94 +11,88 @@ import OpenAI           from 'openai';
 
 /* helpers */
 const pdfText = async b => (await (await import('pdf-parse')).default(b)).text;
-const docText = async b => (await (await import('mammoth')).extractRawText({ buffer:b })).value;
-const csvText = async t => (await import('csv-parse/sync')).parse(t,{to_line:10}).map(r=>r.join(', ')).join('\n');
+const docText = async b => (await (await import('mammoth')).extractRawText({ buffer: b })).value;
+const csvText = async t => (await import('csv-parse/sync')).parse(t, { to_line: 10 })
+  .map(r => r.join(', ')).join('\n');
 
-const openai = new OpenAI({ baseURL:'https://api.deepseek.com', apiKey:process.env.DEEPSEEK_API_KEY });
+const openai = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY,
+});
 
-export async function POST(req){
-  try{
+export async function POST(req) {
+  try {
     const { userId } = getAuth(req);
-    if(!userId) return NextResponse.json({success:false,error:'Not authenticated'});
+    if (!userId) return NextResponse.json({ success: false, error: 'Not authenticated' });
 
-    const fd      = await req.formData();
-    const files   = fd.getAll('file');               // array of File
-    const chatId  = fd.get('chatId');
-    const prompt  = (fd.get('prompt')||'').toString().trim();
+    const fd     = await req.formData();
+    const files  = fd.getAll('file');              // масив файлів
+    const chatId = fd.get('chatId');
+    const prompt = (fd.get('prompt') || '').toString().trim();
 
-    if(!files.length) return NextResponse.json({success:false,error:'No file'});
+    if (!files.length) return NextResponse.json({ success: false, error: 'No file' });
 
     await connectDB();
-    const chat = await Chat.findOne({ _id:chatId, userId });
-    if(!chat) return NextResponse.json({success:false,error:'Chat not found'});
+    const chat = await Chat.findOne({ _id: chatId, userId });
+    if (!chat) return NextResponse.json({ success: false, error: 'Chat not found' });
 
-    /* ——— збір метаданих для файлів ——— */
-    const filesMetadata = [];
-    for(const f of files){
-      if(f.size>5*1024*1024) continue;
+    // ——— додаємо system-повідомлення з метаданими по файлах ———
+    for (const f of files) {
+      if (f.size > 5 * 1024 * 1024) continue;
       const buf = Buffer.from(await f.arrayBuffer());
       const ext = f.name.split('.').pop().toLowerCase();
-      let text  = '';
-
-      switch(ext){
-        case 'pdf':               text = await pdfText(buf);           break;
-        case 'doc': case 'docx':  text = await docText(buf);           break;
-        case 'csv':               text = await csvText(buf.toString());break;
-        default:                  text = buf.toString();
+      let text = '';
+      switch (ext) {
+        case 'pdf':
+          text = await pdfText(buf);
+          break;
+        case 'doc':
+        case 'docx':
+          text = await docText(buf);
+          break;
+        case 'csv':
+          text = await csvText(buf.toString());
+          break;
+        default:
+          text = buf.toString();
       }
-      text = text.trim().slice(0,10_000);
-
-      // створюємо проміжне system-повідомлення, яке показує дані файлу
+      text = text.trim().slice(0, 10_000);
       chat.messages.push({
-        role:'system',
-        content:`[FILE] ${f.name} (${text.split(/\s+/).length} words)\n\n${text}`,
-        timestamp:Date.now()
-      });
-
-      // metadata для user-повідомлення
-      filesMetadata.push({
-        name: f.name,
-        size: f.size,
-        type: f.type
+        role:    'system',
+        content: `[FILE] ${f.name} (${text.split(/\s+/).length} words)\n\n${text}`,
+        timestamp: Date.now(),
       });
     }
 
-    /* ——— якщо є prompt, зберігаємо його як user-повідомлення перед AI ——— */
-    if(prompt){
+    // ——— якщо є prompt, додаємо user-повідомлення та шлемо по ньому AI ———
+    if (prompt) {
       chat.messages.push({
-        role: 'user',
-        content: prompt,
-        files: filesMetadata,
-        timestamp: Date.now()
+        role:     'user',
+        content:  prompt,
+        files:    files.map(f => ({ name: f.name, size: f.size, type: f.type })),
+        timestamp: Date.now(),
       });
-    }
 
-    /* ——— є prompt → викликаємо AI ——— */
-    let answer = '';
-    if(prompt){
-      // побудуємо масив останніх system-повідомлень (файли) + user-повідомлення
-      const lastFileCount = files.length;
-      const recent = [
-        ...chat.messages.slice(-lastFileCount - 1) // бере всі file-повідомлення + щойно доданий user
-      ];
+      // будуємо масив останніх file- та user-повідомлень
+      const recent = chat.messages.slice(-files.length - 1);
 
       const { choices } = await openai.chat.completions.create({
-        model:'deepseek-chat',
-        store:true,
-        messages: recent.map(m => ({ role: m.role, content: m.content }))
+        model:   'deepseek-chat',
+        store:   true,
+        messages: recent.map(m => ({ role: m.role, content: m.content })),
       });
-      answer = choices[0].message.content;
+      const answer = choices[0].message.content;
 
-      chat.messages.push({
-        role:'assistant',
-        content:answer,
-        timestamp:Date.now()
-      });
+      // **не зберігаємо** цей assistant-summary у чаті
+      await chat.save();
+      return NextResponse.json({ success: true, answer });
     }
 
+    // ——— якщо prompt відсутній — просто зберігаємо metadata по файлах ———
     await chat.save();
-    return NextResponse.json({success:true, answer});
-  }catch(err){
-    return NextResponse.json({success:false, error:err.message});
+    return NextResponse.json({ success: true, answer: '' });
+
+  } catch (err) {
+    return NextResponse.json({ success: false, error: err.message });
   }
 }

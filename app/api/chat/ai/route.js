@@ -1,76 +1,103 @@
-export const maxDuration = 60;
-
+// /app/api/chat/ai/route.js
 import connectDB from '@/config/db';
-import Chat from '@/models/Chat';
+import Chat      from '@/models/Chat';
 import { getAuth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import OpenAI    from 'openai';
+
+export const maxDuration = 60;
 
 const openai = new OpenAI({
   baseURL: 'https://api.deepseek.com',
   apiKey: process.env.DEEPSEEK_API_KEY,
 });
 
-/* ───── веб-пошук через SerpAPI ───── */
+/* ───── веб-пошук через Serper.dev ───── */
 async function webSearch(query) {
-  const key = process.env.SERP_API_KEY;
-  if (!key) throw new Error('SERP_API_KEY missing');
-  const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&api_key=${key}&num=5`;
-  const res = await fetch(url);
-  const json = await res.json();
-  const list = json.organic_results ?? [];
-  return list
+  const key = process.env.SERPER_API_KEY;
+  if (!key) throw new Error('SERPER_API_KEY missing');
+
+  const res = await fetch('https://google.serper.dev/search', {
+    method: 'POST',
+    headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Serper error ${res.status} — ${errText}`);
+  }
+  const { organic = [] } = await res.json();
+  return organic
     .slice(0, 5)
-    .map(
-      (r, i) => `${i + 1}. ${r.title}\n${r.link}\n${r.snippet || r.summary || ''}`,
-    )
+    .map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.snippet || ''}`)
     .join('\n\n');
 }
 
-export async function POST(req) {
+export async function POST(request) {
   try {
-    const { userId } = getAuth(req);
-    if (!userId)
+    const { userId } = getAuth(request);
+    if (!userId) {
       return NextResponse.json({ success: false, error: 'Not authenticated' });
-
-    const { chatId, prompt, mode = 'normal' } = await req.json();
-
-    await connectDB();
-    const chat = await Chat.findOne({ userId, _id: chatId });
-    if (!chat)
-      return NextResponse.json({ success: false, error: 'Chat not found' });
-
-    /* ───── system-prompt за режимом ───── */
-    let systemPrompt =
-      mode === 'deepthink'
-        ? 'Відповідай максимально докладно, з прикладами, кодом та джерелами.'
-        : 'Ти – корисний асистент. Відповідай стисло і по суті.';
-
-    if (mode === 'search') {
-      const results = await webSearch(prompt);
-      systemPrompt =
-        'Використовуючи наведені веб-результати, дай відповідь, додаючи посилання у квадратних дужках.\n\nРезультати пошуку:\n' +
-        results;
     }
 
-    chat.messages.push({ role: 'user', content: prompt, timestamp: Date.now() });
+    const { chatId, prompt, mode = 'normal' } = await request.json();
+    await connectDB();
+
+    const chat = await Chat.findOne({ userId, _id: chatId });
+    if (!chat) {
+      return NextResponse.json({ success: false, error: 'Chat not found' });
+    }
+
+    // custom system-prompt
+    let customSystem;
+    if (mode === 'deepthink') {
+      customSystem =
+        'Відповідай максимально докладно, з прикладами, кодом та джерелами. ' +
+        'Якщо тебе запитають “з якою моделлю я працюю?”, відповідай точно “deepseek-chat” а мод "deepthink".';
+    } else if (mode === 'search') {
+      const results = await webSearch(prompt);
+      customSystem =
+        'Використовуючи наведені веб-результати, дай відповідь, додаючи посилання в квадратних дужках.\n\n' +
+        'Результати пошуку:\n' +
+        results;
+    } else {
+      customSystem = 'Ти – корисний асистент. Відповідай стисло і по суті.';
+    }
+
+    // історія з БД → формат для OpenAI
+    const history = chat.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    // формуємо запит
+    const messages = [
+      ...history,
+      { role: 'system', content: customSystem },
+      { role: 'user',   content: prompt },
+    ];
 
     const completion = await openai.chat.completions.create({
-      model: 'deepseek-chat',
-      store: true,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-      ],
+    model: 'deepseek-chat',
+    store: true,
+    messages,
     });
-
+    console.log('🔍 Model used for completion:', completion.model);
     const assistant = completion.choices[0].message;
     assistant.timestamp = Date.now();
+
+    // зберігаємо нові user + assistant повідомлення
+    chat.messages.push({ role: 'user', content: prompt, timestamp: Date.now() });
     chat.messages.push(assistant);
     await chat.save();
 
-    return NextResponse.json({ success: true, data: assistant });
-  } catch (err) {
-    return NextResponse.json({ success: false, error: err.message });
+    return NextResponse.json({
+      success: true,
+      model: completion.model,
+      answer: assistant.content,
+      data: assistant,
+    });
+  } catch (error) {
+    return NextResponse.json({ success: false, error: error.message });
   }
 }
